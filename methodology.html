@@ -560,6 +560,99 @@
   The MFA boundary is the only point we actually know. The "real" perceptual boundary is somewhere in the dashed band, but we don't know exactly where. If two providers both land inside this band — even if they disagree with each other by 60 ms — we cannot conclude one is more accurate. The signal is below the noise floor of the reference. To resolve sub-30 ms differences you'd need a hand-annotated gold reference (or several MFA runs averaged with different acoustic models). <strong>Rule of thumb for this corpus: treat MAE differences under ~30 ms as "tied."</strong>
 </p>
 
+<h2>Why MFA, and what to use instead</h2>
+
+<p>
+  MFA is the default reference aligner in this harness because three things line up: it's <strong>open source and reproducible</strong> (anyone can clone the harness and get the same TextGrids), it has the <strong>highest published word-boundary accuracy</strong> on clean read speech among the widely-used forced aligners, and it's <strong>independent of the STT providers</strong> we're scoring. That third point is the load-bearing one — if we used any neural-CTC-based aligner derived from the same architectures that the STT models use, the eval would systematically flatter providers whose acoustic models look like the reference aligner's.
+</p>
+
+<p>
+  On the published benchmark that matters here, Rousso et al. (<a href="https://arxiv.org/html/2406.19363v1">Interspeech 2024</a>) measured word-boundary accuracy across MFA, WhisperX, and MMS on TIMIT and Buckeye. MFA wins at every tolerance threshold; at ±10 ms it's at 41.6% vs WhisperX 22.4% and MMS 18.6%. That doesn't mean MFA is best in every regime — it means MFA is the right anchor for a defensible reference on clean-ish speech.
+</p>
+
+<p>
+  There are real reasons to pick something else though. The short version:
+</p>
+
+<table class="offsets">
+  <thead>
+    <tr><th>Aligner</th><th>Acoustic basis</th><th>When you'd pick it over MFA</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong><a href="https://montreal-forced-aligner.readthedocs.io">MFA</a></strong></td>
+      <td>Kaldi GMM-HMM (MFCC + LDA + SAT)</td>
+      <td>Default — highest published accuracy on clean speech in a supported language. Needs a transcript and a pronunciation dictionary. Pretrained models for ~30+ languages.</td>
+    </tr>
+    <tr>
+      <td><a href="https://github.com/m-bain/whisperX">WhisperX</a></td>
+      <td>Whisper ASR + wav2vec2 CTC alignment</td>
+      <td>You <em>don't</em> have a reference transcript — WhisperX transcribes <em>and</em> aligns. Handles long-form natively (it VAD-chunks internally). Lower accuracy than MFA on word boundaries, so not ideal as a "gold" reference; useful as a quick check or for languages MFA doesn't support.</td>
+    </tr>
+    <tr>
+      <td><a href="https://github.com/MahmoudAshraf97/ctc-forced-aligner">ctc-forced-aligner</a></td>
+      <td>Wav2Vec2 / HuBERT / MMS CTC</td>
+      <td>Your language isn't supported by MFA. MMS-based variant covers ~1130 languages. Handles long audio via 30-second sliding windows. Pip-installable, no conda dance.</td>
+    </tr>
+    <tr>
+      <td><a href="https://docs.nvidia.com/nemo-framework/user-guide/latest/nemotoolkit/tools/nemo_forced_aligner.html">NeMo Forced Aligner</a></td>
+      <td>NeMo CTC ASR (Conformer / Citrinet / QuartzNet)</td>
+      <td>You already run NeMo for ASR and want timestamps from the same acoustic model that produced your transcript. Heavy install (NeMo + PyTorch + CUDA). Officially tested only on English despite multilingual claims.</td>
+    </tr>
+    <tr>
+      <td><a href="https://github.com/readbeyond/aeneas">Aeneas</a></td>
+      <td>eSpeak TTS + MFCC DTW</td>
+      <td>You're sync'ing audiobook chapters or subtitle lines, not words. Trivially language-agnostic but word-level accuracy is unreliable.</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>
+  <strong>If you swap MFA out, the harness still works</strong> — the eval driver parses MFA-style TextGrids from <code>--mfa-output</code>, so any aligner that emits Praat TextGrids (or that you convert to TextGrids) drops in. The methodology numbers will shift to be "relative to whatever-aligner-you-use." Be explicit about that change in any external write-up.
+</p>
+
+<p>
+  One nuance worth knowing about CTC-based aligners (WhisperX, ctc-forced-aligner, NFA): they exhibit <strong>"peakiness"</strong>, where the CTC model puts almost all its probability on a single frame per token. Word <em>start</em> times are usually fine; word <em>end</em> times come out systematically less reliable than MFA's because the model marks the token at onset and emits blanks through the rest. There's active research on fixing this (e.g. <a href="https://arxiv.org/abs/2406.02560">Huang et al., 2024 on label-prior CTC alignment</a>) but it's a real artifact you should know about if you're comparing the same audio across aligner families.
+</p>
+
+<h2>Long-form audio and why utterances are short</h2>
+
+<p>
+  The harness expects your corpus to be pre-segmented into short utterances — seconds, not minutes. This isn't an arbitrary choice. Several things go wrong if you feed forced alignment a single 30-minute audio file:
+</p>
+
+<ol>
+  <li>
+    <strong>MFA's Viterbi beam search compounds error over long sequences.</strong> Under the hood MFA runs Kaldi's <code>gmm-align-compiled</code> with a pruning beam (default 10, retry 40). On a 30-minute utterance there are ~180,000 frames. Small per-frame likelihood-ranking errors accumulate, the best-path likelihood drops below the worst-kept-hypothesis threshold, and Kaldi gives up with "beam too narrow." You can widen the beam (<code>--beam 400 --retry_beam 1000</code>), but the alignment quality drops significantly — you've just bought yourself a result, not a good one. MFA's docs explicitly recommend utterances under 30 seconds.
+  </li>
+  <li>
+    <strong>Speaker adaptation needs short reliable utterances.</strong> MFA's SAT/fMLLR pass estimates a per-speaker linear transform on the features. It assumes a stable speaker and microphone within each utterance. A long single utterance with mixed speakers or recording-condition changes blows that assumption up.
+  </li>
+  <li>
+    <strong>The drift problem isn't MFA-specific.</strong> Neural CTC aligners (WhisperX, ctc-forced-aligner, NFA) appear to "handle long-form natively," but only because they chunk internally — WhisperX VAD-segments to ~30 s, ctc-forced-aligner uses a 30 s sliding window with 2 s overlap, NFA streams CTC log-probs. The underlying drift in long-sequence alignment is a known issue across all aligner families; Rousso et al. (2024) recommend "recursive forced alignment" with multi-pass boundary refinement and observed drift on Buckeye utterances up to ~9 minutes long across <em>every</em> system they tested.
+  </li>
+</ol>
+
+<p>
+  <strong>The standard long-form pipeline</strong> is straightforward:
+</p>
+
+<ol>
+  <li>Run a <strong>VAD</strong> (<a href="https://github.com/snakers4/silero-vad">silero-vad</a> or <a href="https://huggingface.co/pyannote/segmentation-3.0">pyannote/segmentation-3.0</a>) to find utterance boundaries — speech runs separated by silence.</li>
+  <li>Cut the audio at those VAD boundaries into utterances of roughly 5–30 seconds each.</li>
+  <li>Cut the transcript at the matching positions. This is the hard part — it usually requires either a rough timestamp from the VAD pass paired with sentence boundaries from the transcript, or a one-pass first alignment to bootstrap utterance-level cuts.</li>
+  <li>Run forced alignment per utterance independently.</li>
+  <li>Re-stitch the resulting TextGrids by adding each utterance's start offset back to the word times.</li>
+</ol>
+
+<p>
+  MFA ships a <code>mfa segment</code> command that wraps SpeechBrain VAD for step 1. WhisperX bakes the whole VAD-then-align flow into its tool. If you're starting from long meeting recordings (earnings calls, podcasts, depositions) and need timestamp evals on them, plan for the segmentation step — it's the longest pole in the corpus-prep work, and getting it right matters more for the numbers than the choice of aligner.
+</p>
+
+<p>
+  <strong>Target utterance length:</strong> ~5–30 seconds is the sweet spot for every aligner discussed above. Shorter than ~3 seconds loses context for HMM models; longer than ~30 seconds is where CTC peakiness and HMM beam pruning both start hurting.
+</p>
+
 <h2>What this eval can and can't tell you</h2>
 
 <p><strong>Can tell you:</strong></p>
@@ -612,6 +705,24 @@
 
   <dt>p90 tail</dt>
   <dd>The shape of the distribution past the 90th percentile. A long p90 tail means "the bad cases are very bad," which is often more annoying to users than "everything is consistently OK."</dd>
+
+  <dt>VAD (voice activity detection)</dt>
+  <dd>A model that finds the time spans where speech is happening in an audio file. Used to cut long recordings into utterance-sized chunks before forced alignment. <a href="https://github.com/snakers4/silero-vad">silero-vad</a> and <a href="https://huggingface.co/pyannote/segmentation-3.0">pyannote/segmentation-3.0</a> are the standard open-source choices.</dd>
+
+  <dt>CTC (connectionist temporal classification)</dt>
+  <dd>The output layer used by most modern non-Whisper neural ASR / aligner models (wav2vec2, HuBERT, MMS). It emits one prediction per audio frame plus a "blank" symbol, and the model learns to spike on a single frame per output token. Word boundaries derived from CTC have a known "peakiness" artifact — onsets are sharp, ends are unreliable.</dd>
+
+  <dt>HMM (hidden Markov model)</dt>
+  <dd>The classical acoustic-modelling framework MFA uses. Audio frames are emitted by a sequence of hidden phoneme states; the alignment is the most-probable state sequence (Viterbi). Slower to train, more robust to long sequences than CTC if the audio is well-segmented.</dd>
+
+  <dt>Beam search / beam pruning</dt>
+  <dd>The decoding algorithm that finds the best alignment path. At each frame, only the top-N most-likely partial paths are kept (the "beam"); the rest are pruned. MFA's default beam is 10 — small enough that long single utterances can lose the correct path off the bottom of the beam, which is why pre-segmentation matters.</dd>
+
+  <dt>fMLLR / speaker adaptation</dt>
+  <dd>A per-speaker linear feature transform that MFA estimates to compensate for differences in voices and microphones. Assumes a single stable speaker per utterance — another reason long mixed-speaker recordings should be cut before alignment.</dd>
+
+  <dt>Recursive forced alignment</dt>
+  <dd>A long-form alignment strategy where a first pass gives coarse word boundaries, then those boundaries are used to cut the audio for a refined second pass. Improves drift on long utterances at the cost of compute. (<a href="https://arxiv.org/html/2406.19363v1">Rousso et al., Interspeech 2024</a>)</dd>
 </dl>
 
 </main>
