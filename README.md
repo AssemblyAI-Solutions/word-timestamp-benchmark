@@ -14,6 +14,10 @@ providers in a single invocation produces a side-by-side HTML report.
 > **[`methodology.pdf`](./methodology.pdf)** (renders inline on GitHub) or
 > [`methodology.html`](./methodology.html) (open in a browser — also linked
 > from each generated report).
+>
+> For an example of what a finished report looks like — three providers
+> on ~1,000 utterances of conversational speech — see
+> **[`sample-report.pdf`](./sample-report.pdf)**.
 
 ## Methodology
 
@@ -363,7 +367,9 @@ A reasonable headline for a vendor comparison:
 | `templates/report.html.j2` | Jinja2 HTML template |
 | `methodology.html` | Plain-language walkthrough with worked examples (open in a browser) |
 | `methodology.pdf` | PDF render of the above — renders inline on GitHub. Regenerate with `tools/render-methodology-pdf.sh` after editing the HTML. |
-| `tools/render-methodology-pdf.sh` | Headless-Chrome helper that converts the methodology HTML to PDF. |
+| `sample-report.pdf` | Example output: full report on ~1,000 utterances of MLCommons/peoples_speech across three providers. |
+| `tools/render-pdf.sh` | Headless-Chrome HTML-to-PDF helper. Works for the methodology page and for any generated report (waits for Chart.js to render before snapshotting). |
+| `tools/render-methodology-pdf.sh` | Thin shim that calls `render-pdf.sh` for the methodology specifically. |
 | `populate_corpus.sh` | LibriSpeech dev-clean utterance loader |
 | `populate_corpus_hf.py` | Generic Hugging Face dataset loader |
 | `populate_corpus_earnings22.sh` | Long-form earnings22 puller (needs pre-segmentation) |
