@@ -11,7 +11,9 @@ providers in a single invocation produces a side-by-side HTML report.
 ---
 
 > For a plain-language walkthrough with worked examples and diagrams, see
-> [`methodology.html`](./methodology.html) — open it in a browser.
+> **[`methodology.pdf`](./methodology.pdf)** (renders inline on GitHub) or
+> [`methodology.html`](./methodology.html) (open in a browser — also linked
+> from each generated report).
 
 ## Methodology
 
@@ -360,6 +362,8 @@ A reasonable headline for a vendor comparison:
 | `report.py` | HTML report renderer |
 | `templates/report.html.j2` | Jinja2 HTML template |
 | `methodology.html` | Plain-language walkthrough with worked examples (open in a browser) |
+| `methodology.pdf` | PDF render of the above — renders inline on GitHub. Regenerate with `tools/render-methodology-pdf.sh` after editing the HTML. |
+| `tools/render-methodology-pdf.sh` | Headless-Chrome helper that converts the methodology HTML to PDF. |
 | `populate_corpus.sh` | LibriSpeech dev-clean utterance loader |
 | `populate_corpus_hf.py` | Generic Hugging Face dataset loader |
 | `populate_corpus_earnings22.sh` | Long-form earnings22 puller (needs pre-segmentation) |

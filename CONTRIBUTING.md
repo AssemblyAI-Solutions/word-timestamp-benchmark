@@ -25,7 +25,7 @@ Please include:
 ## Pull requests
 
 - Keep PRs focused on one change at a time.
-- Update `README.md` and `methodology.html` if you change something users see.
+- Update `README.md` and `methodology.html` if you change something users see. If you edit `methodology.html`, regenerate the PDF with `tools/render-methodology-pdf.sh` so the GitHub-visible version stays in sync.
 - Run the eval end-to-end on at least one small corpus (e.g. 50 LibriSpeech utts via `populate_corpus.sh`) before opening the PR.
 
 ## Code style
