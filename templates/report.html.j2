@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Timestamp eval — {{ generated_at[:10] }}</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --fg: #111827; --muted: #6b7280; --faint: #9ca3af;
+    --border: #e5e7eb; --bg: #ffffff; --bg-soft: #f9fafb; --bg-card: #fafafa;
+    --accent: #4f46e5; --good: #047857; --warn: #b45309; --bad: #b91c1c;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--fg); background: var(--bg);
+    line-height: 1.5; font-size: 14px;
+  }
+  main { max-width: 1100px; margin: 0 auto; padding: 32px 32px 80px; }
+  header { margin-bottom: 28px; }
+  h1 { font-size: 28px; font-weight: 700; margin: 0 0 4px; letter-spacing: -0.02em; }
+  .dataset-line { font-size: 17px; color: var(--fg); margin: 6px 0 4px; }
+  .dataset-line a { color: var(--accent); text-decoration: none; }
+  .dataset-line a:hover { text-decoration: underline; }
+  .dataset-line strong { font-weight: 600; }
+  .muted-inline { color: var(--muted); font-size: 13px; }
+  h2 { font-size: 16px; font-weight: 600; margin: 36px 0 14px; letter-spacing: -0.01em; }
+  h3 { font-size: 13px; font-weight: 600; margin: 16px 0 8px;
+       color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .meta { color: var(--muted); font-size: 13px; }
+  .headline {
+    margin: 18px 0 0; padding: 16px 18px;
+    background: linear-gradient(180deg, #f5f7fb, #ffffff);
+    border: 1px solid var(--border); border-radius: 10px;
+    font-size: 16px; line-height: 1.5;
+  }
+  .headline strong { font-weight: 600; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px;
+         background: var(--bg-soft); padding: 1px 5px; border-radius: 4px;
+         color: var(--fg); }
+
+  /* corpus chips */
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 12px; }
+  .chip { display: inline-flex; align-items: center; gap: 6px;
+          padding: 3px 10px; border: 1px solid var(--border);
+          border-radius: 999px; color: var(--muted); background: var(--bg); }
+  .chip strong { color: var(--fg); font-weight: 600; }
+
+  /* provider cards */
+  .cards { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .card { padding: 16px 18px; border: 1px solid var(--border);
+          border-radius: 12px; background: var(--bg-card); }
+  .card .swatch { width: 10px; height: 10px; border-radius: 3px; display: inline-block;
+                  margin-right: 8px; vertical-align: 1px; }
+  .card .title { font-weight: 600; font-size: 14px; }
+  .card .subtitle { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .card .row { display: flex; justify-content: space-between; align-items: baseline;
+               padding: 6px 0; border-top: 1px dashed var(--border); margin-top: 8px; }
+  .card .row:first-of-type { border-top: none; padding-top: 0; }
+  .card .k { color: var(--muted); font-size: 12px; }
+  .card .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .card .vsub { color: var(--muted); font-size: 11px; font-weight: 400; margin-left: 4px; }
+
+  /* tables */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; margin: 0 0 8px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border);
+           vertical-align: middle; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px;
+       text-transform: uppercase; letter-spacing: 0.03em; }
+  td.num { font-variant-numeric: tabular-nums; }
+  td.best { font-weight: 700; }
+  td.best::after { content: " ★"; color: var(--accent); font-size: 11px; }
+  td.provider { font-weight: 600; }
+  td.provider .swatch { width: 8px; height: 8px; border-radius: 2px;
+                        display: inline-block; margin-right: 8px; vertical-align: 1px; }
+  tr.warn { color: var(--warn); }
+
+  .chart-wrap { max-width: 760px; margin: 12px 0 28px; }
+
+  details { margin: 8px 0 18px; }
+  summary { cursor: pointer; padding: 6px 0; font-size: 13px;
+            color: var(--muted); font-weight: 500; }
+  summary:hover { color: var(--fg); }
+  details[open] summary { color: var(--fg); }
+
+  .pill { display: inline-block; padding: 2px 8px; font-size: 11px;
+          border: 1px solid var(--border); border-radius: 999px; margin-left: 6px;
+          color: var(--muted); font-weight: 500; }
+  .pill.ok { color: var(--good); border-color: #a7f3d0; }
+  .pill.warn { color: var(--warn); border-color: #fde68a; }
+  .pill.fail { color: var(--bad); border-color: #fecaca; }
+
+  .caveats { margin: 28px 0; padding: 16px 18px;
+             border-left: 3px solid var(--accent); background: var(--bg-soft);
+             border-radius: 0 8px 8px 0; font-size: 13px; color: #374151; }
+  .caveats h3 { margin-top: 0; }
+  .caveats p { margin: 6px 0; }
+  .caveats ul { margin: 6px 0; padding-left: 20px; }
+  .caveats li { margin: 4px 0; }
+</style>
+</head>
+<body>
+<main>
+
+<header>
+  <h1>Word-level timestamp evaluation</h1>
+  <div class="dataset-line">
+    Dataset:
+    {% if corpus.display_name %}
+      {% if corpus.source_url %}
+        <a href="{{ corpus.source_url }}" target="_blank" rel="noopener"><strong>{{ corpus.display_name }}</strong></a>
+      {% else %}
+        <strong>{{ corpus.display_name }}</strong>
+      {% endif %}
+    {% else %}
+      <strong>{{ corpus_dir }}</strong>
+      <span class="muted-inline">(no <code>corpus.json</code> sidecar — see README for how to label your own corpus)</span>
+    {% endif %}
+  </div>
+  <div class="meta">
+    Generated <code>{{ generated_at[:19] }}Z</code> ·
+    Reference <code>MFA english_mfa</code> ·
+    Corpus directory <code>{{ corpus_dir }}</code> ·
+    <a href="./methodology.html" style="color: var(--accent); text-decoration: none;">how this works ↗</a>
+  </div>
+  <div class="chips">
+    <span class="chip">files: <strong>{{ corpus_summary.files }}</strong></span>
+    {% if corpus_summary.total_duration_s %}
+    <span class="chip">audio: <strong>{{ (corpus_summary.total_duration_s / 60) | round(1) }} min</strong></span>
+    <span class="chip">avg utt: <strong>{{ corpus_summary.avg_duration_s }} s</strong></span>
+    {% endif %}
+    <span class="chip">providers: <strong>{{ runs | length }}</strong></span>
+    <span class="chip">tolerance buckets: <strong>{{ tolerance_buckets_ms | join(', ') }} ms</strong></span>
+  </div>
+  {% if headline %}
+  <div class="headline">{{ headline | safe }}</div>
+  {% endif %}
+</header>
+
+<h2>Per-provider summary</h2>
+<div class="cards">
+  {% for run in runs %}
+  {% set p = run.pooled %}
+  {% set lbl = run.provider ~ ':' ~ run.model %}
+  <div class="card">
+    <div class="title">
+      <span class="swatch" style="background: {{ provider_colors[lbl] }}"></span>
+      {{ run | short_provider }}
+    </div>
+    <div class="subtitle">
+      {{ run.files_scored }} files scored
+      {% if run.files_skipped_no_textgrid %} · {{ run.files_skipped_no_textgrid }} skipped{% endif %}
+      {% if run.files_failed %} · <span style="color: var(--bad)">{{ run.files_failed }} failed</span>{% endif %}
+      · {{ p.ref_words_matched if p.ref_words_matched is defined else p.matched_pairs }} / {{ p.ref_words }} ref words matched ({{ p.match_rate_pct }}%)
+    </div>
+    <div class="row">
+      <span class="k">Start MAE</span>
+      <span class="v">{{ p.start_mae_ms }}<span class="vsub">ms</span></span>
+    </div>
+    <div class="row">
+      <span class="k">Start within 100 ms</span>
+      <span class="v">{{ p.start_within_100ms_pct }}<span class="vsub">%</span></span>
+    </div>
+    <div class="row">
+      <span class="k">End MAE</span>
+      <span class="v">{{ p.end_mae_ms }}<span class="vsub">ms</span></span>
+    </div>
+    <div class="row">
+      <span class="k">End within 100 ms</span>
+      <span class="v">{{ p.end_within_100ms_pct }}<span class="vsub">%</span></span>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+<div class="caveats">
+  <h3>How to read these numbers</h3>
+  <p>
+    Reference timestamps come from <a href="https://montreal-forced-aligner.readthedocs.io">Montreal Forced Aligner</a> using the <code>english_mfa</code> acoustic model. MFA itself has ~30–50 ms of alignment error on clean read speech and more on noisy or spontaneous audio — this is a <em>floor</em> on what these absolute numbers can mean. They are <em>fair across providers</em> because the same reference is applied to all of them, but should not be quoted externally as absolute provider accuracy without first validating the reference against human-annotated boundaries on a sample.
+  </p>
+  <p>
+    Substitutions where one ref word maps to multiple hypothesis words (e.g. ref <code>"1992"</code> → hyp <code>"nineteen ninety two"</code> under inverse text normalization) are merged into one comparable span so the timestamp comparison measures the full span the model emitted. Without this, end-time error is systematically understated.
+  </p>
+  <p>
+    Lower is better for MAE / median / p90. Higher is better for tolerance %. <span style="color: var(--accent)">★</span> marks the best value in each row.
+  </p>
+</div>
+
+<h2>Start-time boundaries</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Provider</th>
+      <th>MAE</th>
+      <th>Median</th>
+      <th>p90</th>
+      {% for t in tolerance_buckets_ms %}
+      <th>≤ {{ t }} ms</th>
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for run in runs %}
+    {% set p = run.pooled %}
+    {% set lbl = run.provider ~ ':' ~ run.model %}
+    <tr>
+      <td class="provider">
+        <span class="swatch" style="background: {{ provider_colors[lbl] }}"></span>
+        {{ run | short_provider }}
+      </td>
+      <td class="num{% if bests.start_mae_ms == lbl %} best{% endif %}">{{ p.start_mae_ms }} ms</td>
+      <td class="num{% if bests.start_median_ms == lbl %} best{% endif %}">{{ p.start_median_ms }} ms</td>
+      <td class="num{% if bests.start_p90_ms == lbl %} best{% endif %}">{{ p.start_p90_ms }} ms</td>
+      {% for t in tolerance_buckets_ms %}
+      <td class="num{% if bests['start_within_' ~ t ~ 'ms_pct'] == lbl %} best{% endif %}">{{ p['start_within_' ~ t ~ 'ms_pct'] }}%</td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>End-time boundaries</h2>
+<table>
+  <thead>
+    <tr>
+      <th>Provider</th>
+      <th>MAE</th>
+      <th>Median</th>
+      <th>p90</th>
+      {% for t in tolerance_buckets_ms %}
+      <th>≤ {{ t }} ms</th>
+      {% endfor %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for run in runs %}
+    {% set p = run.pooled %}
+    {% set lbl = run.provider ~ ':' ~ run.model %}
+    <tr>
+      <td class="provider">
+        <span class="swatch" style="background: {{ provider_colors[lbl] }}"></span>
+        {{ run | short_provider }}
+      </td>
+      <td class="num{% if bests.end_mae_ms == lbl %} best{% endif %}">{{ p.end_mae_ms }} ms</td>
+      <td class="num{% if bests.end_median_ms == lbl %} best{% endif %}">{{ p.end_median_ms }} ms</td>
+      <td class="num{% if bests.end_p90_ms == lbl %} best{% endif %}">{{ p.end_p90_ms }} ms</td>
+      {% for t in tolerance_buckets_ms %}
+      <td class="num{% if bests['end_within_' ~ t ~ 'ms_pct'] == lbl %} best{% endif %}">{{ p['end_within_' ~ t ~ 'ms_pct'] }}%</td>
+      {% endfor %}
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h2>Tolerance distribution</h2>
+<h3>Start boundaries</h3>
+<div class="chart-wrap"><canvas id="startBuckets"></canvas></div>
+<h3>End boundaries</h3>
+<div class="chart-wrap"><canvas id="endBuckets"></canvas></div>
+
+<h2>Per-file detail</h2>
+{% for run in runs %}
+  {% set lbl = run.provider ~ ':' ~ run.model %}
+  <details {% if loop.first %}open{% endif %}>
+    <summary>
+      <span class="swatch" style="background: {{ provider_colors[lbl] }};
+            width: 8px; height: 8px; border-radius: 2px; display: inline-block;
+            margin-right: 8px; vertical-align: 1px;"></span>
+      <strong>{{ run | short_provider }}</strong>
+      — {{ run.files_scored }} scored
+      {% if run.files_skipped_no_textgrid %}, {{ run.files_skipped_no_textgrid }} skipped{% endif %}
+      {% if run.files_failed %}, <span style="color: var(--bad)">{{ run.files_failed }} failed</span>{% endif %}
+    </summary>
+    <table>
+      <thead>
+        <tr>
+          <th>Audio</th>
+          <th>Status</th>
+          <th>Matched</th>
+          <th>Match %</th>
+          <th>Start MAE</th>
+          <th>Start p90</th>
+          <th>End MAE</th>
+          <th>End p90</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for f in run.per_file %}
+        <tr{% if f.status != 'ok' %} class="warn"{% endif %}>
+          <td><code title="{{ f.audio }}">{{ f.audio | truncate_name(40) }}</code></td>
+          <td>
+            {% if f.status == 'ok' %}<span class="pill ok">ok</span>
+            {% elif f.status == 'skipped_no_textgrid' %}<span class="pill warn">skipped</span>
+            {% else %}<span class="pill fail">{{ f.status }}</span>{% endif %}
+          </td>
+          <td class="num"
+              title="Ref words covered / total ref words. Pairs = {{ f.matched_pairs }} (smaller when M:1 merges happen)."
+          >{% if f.ref_words_matched is defined %}{{ f.ref_words_matched }}{% elif f.matched_pairs is defined %}{{ f.matched_pairs }}{% else %}—{% endif %}{% if f.ref_words is defined %} / {{ f.ref_words }}{% endif %}</td>
+          <td class="num">{% if f.match_rate_pct is defined %}{{ f.match_rate_pct }}%{% else %}—{% endif %}</td>
+          <td class="num">{% if f.start_mae_ms is defined %}{{ f.start_mae_ms }} ms{% else %}—{% endif %}</td>
+          <td class="num">{% if f.start_p90_ms is defined %}{{ f.start_p90_ms }} ms{% else %}—{% endif %}</td>
+          <td class="num">{% if f.end_mae_ms is defined %}{{ f.end_mae_ms }} ms{% else %}—{% endif %}</td>
+          <td class="num">{% if f.end_p90_ms is defined %}{{ f.end_p90_ms }} ms{% else %}—{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+{% endfor %}
+
+</main>
+
+<script>
+const ttBuckets = {{ tolerance_buckets_ms | tojson }};
+const runs = {{ runs_chart_data | tojson }};
+const colors = {{ provider_colors | tojson }};
+
+function bucketChart(canvasId, side) {
+  const ctx = document.getElementById(canvasId);
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ttBuckets.map(t => '≤ ' + t + ' ms'),
+      datasets: runs.map(r => ({
+        label: r.label,
+        data: ttBuckets.map(t => r[side + '_within_' + t + 'ms_pct']),
+        backgroundColor: colors[r.label] || '#4f46e5',
+        borderRadius: 4,
+      })),
+    },
+    options: {
+      responsive: true,
+      animation: false,
+      scales: {
+        y: { beginAtZero: true, max: 100,
+             title: { display: true, text: '% of aligned words',
+                      color: '#6b7280', font: { size: 11 } },
+             grid: { color: '#f3f4f6' },
+             ticks: { color: '#6b7280', font: { size: 11 } } },
+        x: { grid: { display: false },
+             ticks: { color: '#6b7280', font: { size: 11 } } },
+      },
+      plugins: {
+        legend: { position: 'top', labels: { color: '#374151',
+                  font: { size: 12 }, boxWidth: 10, boxHeight: 10 } },
+        tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${ctx.parsed.y}%` } },
+      },
+    },
+  });
+}
+bucketChart('startBuckets', 'start');
+bucketChart('endBuckets', 'end');
+</script>
+
+</body>
+</html>

@@ -1,0 +1,10 @@
+assemblyai>=0.64.0
+deepgram-sdk>=4.0.0
+openai>=1.50.0
+jiwer>=4.0.0
+textgrid>=1.5
+python-dotenv>=1.0.0
+jinja2>=3.1.0
+# Optional: HuggingFace dataset loading (only needed for populate_corpus_hf.py)
+datasets>=2.16.0
+soundfile>=0.12.0

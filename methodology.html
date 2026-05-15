@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>How this eval works</title>
+<style>
+  :root {
+    --fg: #111827; --muted: #6b7280; --faint: #9ca3af;
+    --border: #e5e7eb; --bg: #ffffff; --bg-soft: #f9fafb;
+    --accent: #4f46e5; --good: #047857; --warn: #b45309; --bad: #b91c1c;
+    --ref: #4f46e5; --hyp: #0891b2;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    color: var(--fg); background: var(--bg);
+    line-height: 1.6; font-size: 15px;
+  }
+  main { max-width: 820px; margin: 0 auto; padding: 32px 32px 80px; }
+  h1 { font-size: 30px; font-weight: 700; margin: 0 0 8px; letter-spacing: -0.02em; }
+  h2 { font-size: 20px; font-weight: 700; margin: 48px 0 12px;
+       letter-spacing: -0.01em; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+  h3 { font-size: 15px; font-weight: 600; margin: 22px 0 8px; }
+  p { margin: 10px 0; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px;
+         background: var(--bg-soft); padding: 1px 5px; border-radius: 4px; }
+  .lede { color: var(--muted); font-size: 16px; margin: 8px 0 24px; }
+
+  /* pipeline diagram */
+  .pipeline-wrap { margin: 24px 0; }
+  .pipeline-wrap svg { display: block; width: 100%; height: auto; }
+
+  /* word-strip SVG container */
+  .strip-wrap { margin: 18px 0 28px; }
+  .strip-wrap svg { display: block; width: 100%; height: auto; }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--muted); margin: 6px 0 0; }
+  .legend .lk { display: inline-flex; align-items: center; gap: 6px; }
+  .legend .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+  .caption { color: var(--muted); font-size: 13px; margin: 6px 0 0; line-height: 1.5; }
+
+  /* offsets table */
+  table.offsets { width: 100%; border-collapse: collapse;
+                  font-size: 13px; margin: 12px 0 18px; }
+  table.offsets th, table.offsets td {
+    text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border);
+    font-variant-numeric: tabular-nums;
+  }
+  table.offsets th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  table.offsets tr.outlier td { background: #fef2f2; }
+  table.offsets .big { color: var(--bad); font-weight: 600; }
+
+  /* metric block */
+  .metric-card {
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 14px 18px; margin: 12px 0; background: var(--bg-soft);
+  }
+  .metric-card h3 { margin-top: 0; }
+  .metric-card .what { font-size: 14px; }
+  .metric-card .why { color: var(--muted); font-size: 13px; margin-top: 4px; }
+
+  /* glossary */
+  dl.glossary { margin: 12px 0; }
+  dl.glossary dt { font-weight: 600; margin: 12px 0 2px; }
+  dl.glossary dd { margin: 0 0 8px 0; color: var(--muted); font-size: 14px; }
+
+  .nav { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
+  .nav a { color: var(--accent); text-decoration: none; }
+  .nav a:hover { text-decoration: underline; }
+
+  .callout {
+    border-left: 3px solid var(--accent); background: var(--bg-soft);
+    padding: 12px 16px; margin: 16px 0; border-radius: 0 8px 8px 0;
+    font-size: 14px;
+  }
+</style>
+</head>
+<body>
+<main>
+
+<div class="nav">← <a href="./README.md">README</a> &nbsp;·&nbsp; <a href="./latest.html">latest results</a></div>
+
+<h1>How this eval works</h1>
+<p class="lede">
+  This page explains the eval methodology in plain language with concrete examples — what the harness does, what each metric means, what the results can and can't tell you, and where the inevitable noise comes from.
+</p>
+
+<h2>The pipeline at a glance</h2>
+
+<div class="pipeline-wrap">
+<svg viewBox="0 0 800 280" xmlns="http://www.w3.org/2000/svg" font-family="ui-sans-serif, system-ui, sans-serif">
+  <defs>
+    <marker id="pipe-arrow" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6b7280"/>
+    </marker>
+    <style>
+      .pbox-rect { fill: #f9fafb; stroke: #e5e7eb; stroke-width: 1; }
+      .pbox-title { font-size: 13px; font-weight: 600; fill: #111827; }
+      .pbox-sub { font-size: 12px; fill: #6b7280; }
+      .arrow { stroke: #6b7280; stroke-width: 1.5; fill: none; }
+      .arrow-label { font-size: 11px; fill: #6b7280; }
+    </style>
+  </defs>
+
+  <!-- Corpus (left) -->
+  <g>
+    <rect class="pbox-rect" x="10" y="100" width="190" height="80" rx="10"/>
+    <text class="pbox-title" x="105" y="128" text-anchor="middle">Corpus</text>
+    <text class="pbox-sub" x="105" y="148" text-anchor="middle">audio file +</text>
+    <text class="pbox-sub" x="105" y="164" text-anchor="middle">corrected transcript</text>
+  </g>
+
+  <!-- MFA reference (top-middle) -->
+  <g>
+    <rect class="pbox-rect" x="280" y="20" width="240" height="80" rx="10"/>
+    <text class="pbox-title" x="400" y="48" text-anchor="middle">Reference timestamps</text>
+    <text class="pbox-sub" x="400" y="68" text-anchor="middle">MFA reads audio + transcript</text>
+    <text class="pbox-sub" x="400" y="84" text-anchor="middle">→ TextGrid with word times</text>
+  </g>
+
+  <!-- Hypothesis (bottom-middle) -->
+  <g>
+    <rect class="pbox-rect" x="280" y="180" width="240" height="80" rx="10"/>
+    <text class="pbox-title" x="400" y="208" text-anchor="middle">Hypothesis timestamps</text>
+    <text class="pbox-sub" x="400" y="228" text-anchor="middle">STT provider transcribes audio</text>
+    <text class="pbox-sub" x="400" y="244" text-anchor="middle">→ word-level start &amp; end</text>
+  </g>
+
+  <!-- Score (right) -->
+  <g>
+    <rect class="pbox-rect" x="600" y="100" width="190" height="80" rx="10"/>
+    <text class="pbox-title" x="695" y="128" text-anchor="middle">Score</text>
+    <text class="pbox-sub" x="695" y="148" text-anchor="middle">pair, measure offsets,</text>
+    <text class="pbox-sub" x="695" y="164" text-anchor="middle">aggregate to metrics</text>
+  </g>
+
+  <!-- Arrow: Corpus -> MFA (audio + transcript) -->
+  <path class="arrow" d="M 200 130 C 240 130, 240 60, 280 60" marker-end="url(#pipe-arrow)"/>
+  <text class="arrow-label" x="218" y="85">audio + transcript</text>
+
+  <!-- Arrow: Corpus -> Provider (audio only) -->
+  <path class="arrow" d="M 200 150 C 240 150, 240 220, 280 220" marker-end="url(#pipe-arrow)"/>
+  <text class="arrow-label" x="218" y="200">audio only</text>
+
+  <!-- Arrow: MFA -> Score (ref word times) -->
+  <path class="arrow" d="M 520 60 C 560 60, 560 130, 600 130" marker-end="url(#pipe-arrow)"/>
+  <text class="arrow-label" x="538" y="85">ref word times</text>
+
+  <!-- Arrow: Provider -> Score (hyp word times) -->
+  <path class="arrow" d="M 520 220 C 560 220, 560 150, 600 150" marker-end="url(#pipe-arrow)"/>
+  <text class="arrow-label" x="538" y="200">hyp word times</text>
+</svg>
+</div>
+
+<p>
+  Two streams of word-level timestamps for the same audio — one from a forced aligner that "cheats" by being given the correct transcript, and one from the STT provider doing recognition from scratch. We line up the words and measure how far apart the times are.
+</p>
+
+<h2>A worked example, end to end</h2>
+
+<p>
+  Let's walk through one real LibriSpeech utterance through every stage. The audio is 1.2 seconds long; the spoken transcript is:
+</p>
+<p style="text-align: center; font-size: 18px; font-weight: 500;">
+  "he doesn't work at all"
+</p>
+
+<h3>1. Reference from MFA</h3>
+<p>
+  MFA takes the audio plus the correct transcript and aligns the two: it figures out exactly when each word's phonemes occur in the audio. The output is a TextGrid with one timestamped box per word. Drawn on a time axis:
+</p>
+
+<div class="strip-wrap">
+<svg viewBox="0 0 800 90" xmlns="http://www.w3.org/2000/svg">
+  <!-- time axis ticks -->
+  <g font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#9ca3af">
+    <line x1="0" y1="80" x2="800" y2="80" stroke="#e5e7eb" stroke-width="1"/>
+    <g text-anchor="middle">
+      <line x1="0" y1="78" x2="0" y2="82" stroke="#9ca3af"/>
+      <text x="0" y="89" text-anchor="start">0 ms</text>
+      <line x1="200" y1="78" x2="200" y2="82" stroke="#9ca3af"/>
+      <text x="200" y="89">500 ms</text>
+      <line x1="400" y1="78" x2="400" y2="82" stroke="#9ca3af"/>
+      <text x="400" y="89">1000 ms</text>
+      <line x1="600" y1="78" x2="600" y2="82" stroke="#9ca3af"/>
+      <text x="600" y="89">1500 ms</text>
+      <line x1="787" y1="78" x2="787" y2="82" stroke="#9ca3af"/>
+      <text x="787" y="89" text-anchor="end">1970 ms</text>
+    </g>
+  </g>
+  <!-- ref strip: he(520-670), doesn't(670-910), work(910-1110), at(1110-1190), all(1190-1630) -->
+  <!-- scale: 1 ms = 0.4 px -->
+  <g font-family="ui-sans-serif" font-size="11" fill="#fff" text-anchor="middle">
+    <rect x="208" y="20" width="60"   height="44" fill="#4f46e5" rx="3"/>
+    <text x="238" y="46">he</text>
+    <rect x="268" y="20" width="96"   height="44" fill="#4f46e5" rx="3" stroke="#fff"/>
+    <text x="316" y="46">doesn't</text>
+    <rect x="364" y="20" width="80"   height="44" fill="#4f46e5" rx="3" stroke="#fff"/>
+    <text x="404" y="46">work</text>
+    <rect x="444" y="20" width="32"   height="44" fill="#4f46e5" rx="3" stroke="#fff"/>
+    <text x="460" y="46">at</text>
+    <rect x="476" y="20" width="176"  height="44" fill="#4f46e5" rx="3" stroke="#fff"/>
+    <text x="564" y="46">all</text>
+  </g>
+</svg>
+</div>
+<div class="legend">
+  <span class="lk"><span class="sw" style="background: var(--ref)"></span> MFA reference (this is the "ground truth")</span>
+</div>
+
+<h3>2. Hypothesis from the STT provider</h3>
+<p>
+  The same audio goes to the STT provider (here, AssemblyAI universal-3-pro). The provider produces its own word-level timestamps without seeing the ground-truth transcript. Drawn on the same time axis:
+</p>
+
+<div class="strip-wrap">
+<svg viewBox="0 0 800 130" xmlns="http://www.w3.org/2000/svg">
+  <!-- shared time axis at top -->
+  <g font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#9ca3af">
+    <line x1="0" y1="10" x2="800" y2="10" stroke="#e5e7eb"/>
+    <g text-anchor="middle">
+      <line x1="0" y1="8" x2="0" y2="12" stroke="#9ca3af"/>
+      <line x1="200" y1="8" x2="200" y2="12" stroke="#9ca3af"/>
+      <line x1="400" y1="8" x2="400" y2="12" stroke="#9ca3af"/>
+      <line x1="600" y1="8" x2="600" y2="12" stroke="#9ca3af"/>
+    </g>
+  </g>
+
+  <!-- ref strip (top) -->
+  <text x="0" y="32" font-family="ui-sans-serif" font-size="10" fill="#6b7280">ref</text>
+  <g font-family="ui-sans-serif" font-size="11" fill="#fff" text-anchor="middle">
+    <rect x="208" y="24" width="60"   height="28" fill="#4f46e5" rx="3"/>
+    <text x="238" y="42">he</text>
+    <rect x="268" y="24" width="96"   height="28" fill="#4f46e5" rx="3" stroke="#fff"/>
+    <text x="316" y="42">doesn't</text>
+    <rect x="364" y="24" width="80"   height="28" fill="#4f46e5" rx="3" stroke="#fff"/>
+    <text x="404" y="42">work</text>
+    <rect x="444" y="24" width="32"   height="28" fill="#4f46e5" rx="3" stroke="#fff"/>
+    <text x="460" y="42">at</text>
+    <rect x="476" y="24" width="176"  height="28" fill="#4f46e5" rx="3" stroke="#fff"/>
+    <text x="564" y="42">all</text>
+  </g>
+
+  <!-- hyp strip (bottom): he 597-697, doesn't 697-946, work 946-1129, at 1129-1262, all 1262-1312 -->
+  <text x="0" y="84" font-family="ui-sans-serif" font-size="10" fill="#6b7280">hyp</text>
+  <g font-family="ui-sans-serif" font-size="11" fill="#fff" text-anchor="middle">
+    <rect x="239" y="76" width="40"   height="28" fill="#0891b2" rx="3"/>
+    <text x="259" y="94">he</text>
+    <rect x="279" y="76" width="99"   height="28" fill="#0891b2" rx="3" stroke="#fff"/>
+    <text x="328" y="94">doesn't</text>
+    <rect x="378" y="76" width="73"   height="28" fill="#0891b2" rx="3" stroke="#fff"/>
+    <text x="414" y="94">work</text>
+    <rect x="452" y="76" width="53"   height="28" fill="#0891b2" rx="3" stroke="#fff"/>
+    <text x="478" y="94">at</text>
+    <rect x="505" y="76" width="20"   height="28" fill="#0891b2" rx="3" stroke="#fff"/>
+    <text x="515" y="94">all</text>
+  </g>
+
+  <!-- connecting offset arrows between matched word starts -->
+  <g stroke="#9ca3af" stroke-width="1" fill="none" stroke-dasharray="2,2">
+    <line x1="208" y1="52" x2="239" y2="76"/>
+    <line x1="268" y1="52" x2="279" y2="76"/>
+    <line x1="364" y1="52" x2="378" y2="76"/>
+    <line x1="444" y1="52" x2="452" y2="76"/>
+    <line x1="476" y1="52" x2="505" y2="76"/>
+  </g>
+
+  <!-- highlight the "all" end-boundary gap -->
+  <g>
+    <line x1="652" y1="38" x2="652" y2="116" stroke="#b91c1c" stroke-width="1" stroke-dasharray="3,3"/>
+    <line x1="525" y1="90" x2="525" y2="116" stroke="#b91c1c" stroke-width="1" stroke-dasharray="3,3"/>
+    <line x1="525" y1="116" x2="652" y2="116" stroke="#b91c1c" stroke-width="1.5"/>
+    <text x="588" y="128" font-family="ui-sans-serif" font-size="10" fill="#b91c1c" text-anchor="middle">end-of-"all" gap = 318 ms</text>
+  </g>
+</svg>
+</div>
+<div class="legend">
+  <span class="lk"><span class="sw" style="background: var(--ref)"></span> MFA reference</span>
+  <span class="lk"><span class="sw" style="background: var(--hyp)"></span> AAI hypothesis</span>
+  <span class="lk"><span class="sw" style="background: #b91c1c"></span> notable boundary gap</span>
+</div>
+<p class="caption">
+  Most word boundaries line up tightly. The exception is the end of "all" — MFA includes the trailing breath/silence in the word; the provider cut the word off earlier. <strong>This isn't necessarily a model error</strong> — it's a real disagreement about where the word ends. That ambiguity is intrinsic to word boundaries in continuous speech.
+</p>
+
+<h3>3. Aligning the two word sequences</h3>
+<p>
+  Both sides have 5 words and they're in the same order, so pairing is straightforward: <code>he</code>↔<code>he</code>, <code>doesn't</code>↔<code>doesn't</code>, and so on. When the model mis-recognises words or the word counts differ, we use <strong>minimum edit distance</strong> alignment (the same algorithm WER uses) to find the best pairing. Substitutions still produce paired words — we score the timestamps regardless of whether the recognised text was right.
+</p>
+
+<h3>4. Measuring the offsets</h3>
+
+<table class="offsets">
+  <thead>
+    <tr><th>Word</th><th>Ref start</th><th>Hyp start</th><th>Δ start</th>
+        <th>Ref end</th><th>Hyp end</th><th>Δ end</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>he</td><td>520</td><td>597</td><td>+77 ms</td><td>670</td><td>697</td><td>+27 ms</td></tr>
+    <tr><td>doesn't</td><td>670</td><td>697</td><td>+27 ms</td><td>910</td><td>946</td><td>+36 ms</td></tr>
+    <tr><td>work</td><td>910</td><td>946</td><td>+36 ms</td><td>1110</td><td>1129</td><td>+19 ms</td></tr>
+    <tr><td>at</td><td>1110</td><td>1129</td><td>+19 ms</td><td>1190</td><td>1262</td><td>+72 ms</td></tr>
+    <tr class="outlier"><td>all</td><td>1190</td><td>1262</td><td>+72 ms</td><td>1630</td><td>1312</td><td class="big">−318 ms</td></tr>
+  </tbody>
+</table>
+<p class="caption">
+  Δ is the absolute offset: how far off the provider's word boundary is from MFA's. Sign just tells us "early vs. late." For metrics we take the absolute value.
+</p>
+
+<h3>5. What this utterance contributes to the corpus metrics</h3>
+<div class="callout">
+  <strong>This one utterance's local metrics:</strong> start MAE = (77+27+36+19+72)/5 = <strong>46 ms</strong> · end MAE = (27+36+19+72+318)/5 = <strong>94 ms</strong>. Notice how a <em>single</em> bad boundary ("all" end) doubles the end-MAE — this is exactly why we also report <strong>median</strong> (would have been 36 ms — much tighter) and <strong>p90</strong> (catches the outlier). The corpus-level metric is computed by pooling all word-pair offsets across <em>every</em> utterance, then computing MAE/median/p90/buckets once on the pooled set.
+</div>
+
+<h2>The multi-word substitution merge, visualized</h2>
+
+<p>
+  One word in the reference can map to multiple words in the hypothesis (or vice versa). The classic case is <strong>inverse text normalization</strong>: the reference transcript says <code>"1992"</code> but the provider, with <code>format_text</code> on, transcribed it as <code>"nineteen ninety two"</code>. Without handling this, the harness would compare the timestamp of <code>"1992"</code> to the timestamp of just <code>"nineteen"</code>, treating the other two words as random insertions — which produces <em>fake</em> timestamp errors.
+</p>
+
+<h3>Without merging (wrong)</h3>
+<div class="strip-wrap">
+<svg viewBox="0 0 800 180" xmlns="http://www.w3.org/2000/svg">
+  <!-- ref row -->
+  <text x="0" y="42" font-family="ui-sans-serif" font-size="11" fill="#6b7280">ref</text>
+  <g font-family="ui-sans-serif" font-size="12" fill="#fff" text-anchor="middle">
+    <rect x="100" y="30" width="240" height="32" fill="#4f46e5" rx="3"/>
+    <text x="220" y="50">1992</text>
+  </g>
+
+  <!-- pairing arrow from ref "1992" down to hyp "nineteen" only -->
+  <defs>
+    <marker id="arrow-bad" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b91c1c"/>
+    </marker>
+  </defs>
+  <path d="M 220 62 C 220 80, 145 80, 145 98"
+        stroke="#b91c1c" stroke-width="1.5" fill="none"
+        marker-end="url(#arrow-bad)"/>
+  <text x="240" y="84" font-family="ui-sans-serif" font-size="10" fill="#b91c1c">
+    edit-distance pairs ref "1992" with just "nineteen"
+  </text>
+
+  <!-- hyp row -->
+  <text x="0" y="118" font-family="ui-sans-serif" font-size="11" fill="#6b7280">hyp</text>
+  <g font-family="ui-sans-serif" font-size="12" fill="#fff" text-anchor="middle">
+    <rect x="100" y="100" width="90"  height="32" fill="#0891b2" rx="3" stroke="#fff" stroke-width="2"/>
+    <text x="145" y="120">nineteen</text>
+    <rect x="190" y="100" width="80"  height="32" fill="#0891b2" rx="3" fill-opacity="0.35" stroke="#fff" stroke-width="2"/>
+    <text x="230" y="120" fill="#1f2937">ninety</text>
+    <rect x="270" y="100" width="70"  height="32" fill="#0891b2" rx="3" fill-opacity="0.35" stroke="#fff" stroke-width="2"/>
+    <text x="305" y="120" fill="#1f2937">two</text>
+  </g>
+
+  <!-- "dropped as insertions" label for the two faded boxes -->
+  <line x1="190" y1="138" x2="340" y2="138" stroke="#9ca3af" stroke-width="1"/>
+  <text x="265" y="151" font-family="ui-sans-serif" font-size="10" fill="#6b7280" text-anchor="middle">
+    "ninety" and "two" dropped as random insertions
+  </text>
+
+  <!-- bogus end-time gap bracket: end of "nineteen" (x=190) vs end of "1992" (x=340) -->
+  <g>
+    <line x1="190" y1="100" x2="190" y2="162" stroke="#b91c1c" stroke-dasharray="3,3"/>
+    <line x1="340" y1="62"  x2="340" y2="162" stroke="#b91c1c" stroke-dasharray="3,3"/>
+    <path d="M 190 162 L 340 162" stroke="#b91c1c" stroke-width="2"/>
+    <path d="M 190 159 L 190 165" stroke="#b91c1c" stroke-width="2"/>
+    <path d="M 340 159 L 340 165" stroke="#b91c1c" stroke-width="2"/>
+    <text x="265" y="176" font-family="ui-sans-serif" font-size="11" fill="#b91c1c"
+          text-anchor="middle" font-weight="600">
+      bogus end-time error of ~370 ms
+    </text>
+  </g>
+</svg>
+</div>
+<p class="caption">
+  Naïve edit-distance alignment pairs "1992" with just the first hypothesis word ("nineteen"), and treats "ninety" and "two" as random insertions that get dropped. The harness then compares the end-time of "1992" to the end-time of "nineteen", and concludes the model got the boundary 370 ms wrong — but the model didn't get anything wrong; it just spelled the number out.
+</p>
+
+<h3>With merging (right)</h3>
+<div class="strip-wrap">
+<svg viewBox="0 0 800 170" xmlns="http://www.w3.org/2000/svg">
+  <!-- ref row -->
+  <text x="0" y="42" font-family="ui-sans-serif" font-size="11" fill="#6b7280">ref</text>
+  <g font-family="ui-sans-serif" font-size="12" fill="#fff" text-anchor="middle">
+    <rect x="100" y="30" width="240" height="32" fill="#4f46e5" rx="3"/>
+    <text x="220" y="50">1992</text>
+  </g>
+
+  <!-- pairing arrow from ref to merged hyp span -->
+  <defs>
+    <marker id="arrow-good" viewBox="0 0 10 10" refX="9" refY="5"
+            markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#047857"/>
+    </marker>
+  </defs>
+  <path d="M 220 62 C 220 80, 220 80, 220 98"
+        stroke="#047857" stroke-width="1.5" fill="none"
+        marker-end="url(#arrow-good)"/>
+  <text x="240" y="84" font-family="ui-sans-serif" font-size="10" fill="#047857">
+    paired against the whole merged hyp span
+  </text>
+
+  <!-- hyp row: three sub-boxes shown inside one big merged outline -->
+  <text x="0" y="118" font-family="ui-sans-serif" font-size="11" fill="#6b7280">hyp</text>
+  <g font-family="ui-sans-serif" font-size="12" fill="#fff" text-anchor="middle">
+    <rect x="100" y="100" width="90"  height="32" fill="#0891b2" stroke="#0891b2" stroke-width="0.5"/>
+    <text x="145" y="120">nineteen</text>
+    <rect x="190" y="100" width="80"  height="32" fill="#0891b2" stroke="#fff" stroke-width="1.5"/>
+    <text x="230" y="120">ninety</text>
+    <rect x="270" y="100" width="70"  height="32" fill="#0891b2" stroke="#fff" stroke-width="1.5"/>
+    <text x="305" y="120">two</text>
+    <!-- merged-span outline -->
+    <rect x="100" y="100" width="240" height="32" fill="none"
+          stroke="#047857" stroke-width="2.5" rx="3"/>
+  </g>
+  <text x="220" y="151" font-family="ui-sans-serif" font-size="10" fill="#047857" text-anchor="middle">
+    treated as one virtual word: start = 0 ms, end = 1000 ms
+  </text>
+  <text x="220" y="166" font-family="ui-sans-serif" font-size="11" fill="#047857" text-anchor="middle" font-weight="600">
+    end-time error ≈ 0 ms — what we wanted
+  </text>
+</svg>
+</div>
+<p class="caption">
+  Whenever the alignment step finds an N-to-M substitution span, the harness merges the larger side into a single virtual word whose start is the first sub-word's start and whose end is the last sub-word's end. Now the comparison measures the full span the model emitted for that reference word, which is what we wanted in the first place.
+</p>
+
+<h2>What each metric actually means</h2>
+
+<div class="metric-card">
+  <h3>MAE (mean absolute error)</h3>
+  <div class="what"><strong>What:</strong> the average distance — in milliseconds — between where the provider says a word starts/ends and where MFA says it does.</div>
+  <div class="why"><strong>Why it can mislead:</strong> a single very-bad outlier pulls the average up a lot. The worked example above had four good word ends and one bad one, and MAE jumped from "tight" to "94 ms" because of that single outlier.</div>
+</div>
+
+<div class="metric-card">
+  <h3>Median</h3>
+  <div class="what"><strong>What:</strong> the typical case — half the words are tighter than this, half are looser.</div>
+  <div class="why"><strong>Why it matters:</strong> median is robust to outliers. If MAE is much bigger than median, the model has a few bad cases dragging the average up. That's a different problem than "the model is consistently a little off," and it calls for different fixes.</div>
+</div>
+
+<div class="metric-card">
+  <h3>p90 (90th percentile)</h3>
+  <div class="what"><strong>What:</strong> the worst case, almost. 90% of words land tighter than this; 10% land looser.</div>
+  <div class="why"><strong>Why it matters:</strong> if you're shipping a feature that depends on timestamps — subtitles, end-of-turn detection, voice-over editing — the worst 10% of words is what your users will notice. p90 is the realistic upper bound on "how bad will this feel."</div>
+</div>
+
+<div class="metric-card">
+  <h3>% within X ms (tolerance buckets)</h3>
+  <div class="what"><strong>What:</strong> the fraction of words where the boundary lands inside a given tolerance. We report 25, 50, 100, and 200 ms.</div>
+  <div class="why"><strong>Why it matters:</strong> these map directly to product decisions. Around 50 ms is roughly the limit of perceptual relevance for subtitle timing. 100 ms is a comfortable margin for response-trigger features. 200 ms is generous — anything outside that is "looks broken." Pick the bucket that matches what you're building.</div>
+</div>
+
+<h2>Reading the tolerance buckets carefully</h2>
+
+<p>
+  The buckets are <strong>cumulative, not exclusive</strong>. "% within 200 ms" means "the fraction of word boundaries that landed <em>anywhere from 0 to 200 ms</em> off the reference," not "the fraction in the 100–200 ms range specifically." A boundary that's only 30 ms off counts in the ≤50, ≤100, and ≤200 buckets simultaneously.
+</p>
+
+<p>
+  Concrete example using the LibriSpeech start-time numbers:
+</p>
+
+<table class="offsets">
+  <thead>
+    <tr><th>Bucket</th><th>AAI U3 Pro</th><th>Whisper-1</th><th>What it actually means</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>≤ 25 ms</td><td>18.9 %</td><td>18.5 %</td><td>fraction of starts within 25 ms of the reference</td></tr>
+    <tr><td>≤ 50 ms</td><td>43.2 %</td><td>41.0 %</td><td>within 50 ms (includes the ≤25 ms boundaries too)</td></tr>
+    <tr><td>≤ 100 ms</td><td>79.2 %</td><td>68.3 %</td><td>within 100 ms (includes both buckets above)</td></tr>
+    <tr><td>≤ 200 ms</td><td><strong>99.3 %</strong></td><td><strong>83.9 %</strong></td><td>within 200 ms (includes all of the above)</td></tr>
+  </tbody>
+</table>
+
+<p>
+  So "AAI wins at 200 ms" doesn't mean AAI is more often <em>in</em> the 100–200 ms range. It means AAI has fewer boundaries that miss by <em>more than</em> 200 ms — fewer catastrophic outliers. AAI's 99.3 % within 200 ms says only <strong>0.7 %</strong> of its word starts miss by more than 200 ms. Whisper's 83.9 % means <strong>16.1 %</strong> miss by more than 200 ms — about 22× as many catastrophically-bad starts. That's where Whisper's long p90 tail (310 ms) shows up in the bucket view.
+</p>
+
+<h3>Reading multiple buckets together tells the story</h3>
+
+<ul>
+  <li><strong>Wins at every bucket</strong> → consistently better across the whole distribution.</li>
+  <li><strong>Wins at tight (≤25, ≤50) but loses at loose (≤200)</strong> → very precise when it nails the timestamp, but has a long tail of catastrophic misses. (This is Whisper's pattern on peoples_speech — best ≤25 ms percentage, worst ≤200 ms.)</li>
+  <li><strong>Wins at loose (≤200) but loses at tight (≤25)</strong> → rarely catastrophic but rarely very precise either. Consistent, never great, never terrible.</li>
+</ul>
+
+<h3>If you actually want "% in the 100–200 ms range"</h3>
+
+<p>
+  Subtract: <code>within_200 − within_100</code>. For AAI on LibriSpeech, that's 99.3 − 79.2 = <strong>20.1 %</strong> of boundaries fell strictly between 100 and 200 ms off. For Whisper, it's 83.9 − 68.3 = <strong>15.6 %</strong>. Useful if you care about a specific tolerance band rather than "anything tighter than X."
+</p>
+
+<h2>How small a difference is real?</h2>
+
+<p>
+  MFA itself has alignment error. On clean read speech that's typically ~30–50 ms per boundary; on noisier or spontaneous speech, more. That's a <strong>floor</strong> on what these absolute numbers can resolve. Schematically:
+</p>
+
+<div class="strip-wrap">
+<svg viewBox="0 0 800 200" xmlns="http://www.w3.org/2000/svg">
+  <!-- noise band (uncertainty around MFA) -->
+  <rect x="250" y="60" width="300" height="40"
+        fill="#4f46e5" fill-opacity="0.10" stroke="#4f46e5" stroke-opacity="0.4"
+        stroke-dasharray="4,3"/>
+  <text x="400" y="48" text-anchor="middle" font-family="ui-sans-serif" font-size="11" fill="#4f46e5" font-weight="600">
+    MFA uncertainty band: ±~50 ms
+  </text>
+  <text x="400" y="155" text-anchor="middle" font-family="ui-sans-serif" font-size="11" fill="#4f46e5">
+    the real perceptual boundary lives somewhere in here
+  </text>
+
+  <!-- horizontal time axis -->
+  <line x1="100" y1="80" x2="700" y2="80" stroke="#9ca3af" stroke-width="1.5"/>
+
+  <!-- scale ticks -->
+  <g font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#9ca3af" text-anchor="middle">
+    <line x1="250" y1="76" x2="250" y2="84" stroke="#9ca3af"/>
+    <text x="250" y="116">−50 ms</text>
+    <line x1="325" y1="76" x2="325" y2="84" stroke="#9ca3af"/>
+    <text x="325" y="116">−25 ms</text>
+    <line x1="475" y1="76" x2="475" y2="84" stroke="#9ca3af"/>
+    <text x="475" y="116">+25 ms</text>
+    <line x1="550" y1="76" x2="550" y2="84" stroke="#9ca3af"/>
+    <text x="550" y="116">+50 ms</text>
+  </g>
+
+  <!-- MFA boundary tick (the anchor — the thing we actually measured against) -->
+  <line x1="400" y1="55" x2="400" y2="105" stroke="#4f46e5" stroke-width="2"/>
+  <text x="400" y="33" text-anchor="middle" font-family="ui-sans-serif" font-size="11" fill="#4f46e5" font-weight="600">
+    MFA boundary
+  </text>
+  <text x="400" y="129" text-anchor="middle" font-family="ui-monospace, Menlo, monospace" font-size="10" fill="#4f46e5">
+    0 ms (reference)
+  </text>
+
+  <!-- provider A: 25 ms before MFA -->
+  <circle cx="325" cy="80" r="5" fill="#0891b2"/>
+  <line x1="325" y1="80" x2="325" y2="170" stroke="#0891b2" stroke-width="1" stroke-dasharray="2,3"/>
+  <text x="325" y="183" text-anchor="middle" font-family="ui-sans-serif" font-size="11" fill="#0891b2" font-weight="600">
+    Provider A · −25 ms
+  </text>
+
+  <!-- provider B: 35 ms after MFA -->
+  <circle cx="505" cy="80" r="5" fill="#ca8a04"/>
+  <line x1="505" y1="80" x2="505" y2="170" stroke="#ca8a04" stroke-width="1" stroke-dasharray="2,3"/>
+  <text x="505" y="183" text-anchor="middle" font-family="ui-sans-serif" font-size="11" fill="#ca8a04" font-weight="600">
+    Provider B · +35 ms
+  </text>
+
+  <!-- annotation: both inside the band -->
+  <text x="400" y="197" text-anchor="middle" font-family="ui-sans-serif" font-size="10" fill="#6b7280">
+    both providers fall inside MFA's own uncertainty band — we can't say which is closer to the real boundary
+  </text>
+</svg>
+</div>
+<p class="caption">
+  The MFA boundary is the only point we actually know. The "real" perceptual boundary is somewhere in the dashed band, but we don't know exactly where. If two providers both land inside this band — even if they disagree with each other by 60 ms — we cannot conclude one is more accurate. The signal is below the noise floor of the reference. To resolve sub-30 ms differences you'd need a hand-annotated gold reference (or several MFA runs averaged with different acoustic models). <strong>Rule of thumb for this corpus: treat MAE differences under ~30 ms as "tied."</strong>
+</p>
+
+<h2>What this eval can and can't tell you</h2>
+
+<p><strong>Can tell you:</strong></p>
+<ul>
+  <li>Which provider's word boundaries match MFA's most consistently on this corpus.</li>
+  <li>How the distribution of timestamp errors looks (tight vs. long-tailed).</li>
+  <li>Whether the provider's timestamps are good enough for a downstream feature with a known tolerance budget.</li>
+  <li>Relative performance across providers, fairly — because all providers are compared against the same reference.</li>
+</ul>
+
+<p><strong>Can't tell you:</strong></p>
+<ul>
+  <li>Absolute "ground-truth" accuracy in ms — you're bounded below by MFA's own error.</li>
+  <li>How a provider will do on speech that's wildly different from this corpus (noisy, accented, conversational, non-English) — you'd run it on those datasets specifically.</li>
+  <li>Whether the model recognised the right words. This is a timestamp eval, not a WER eval. The match-rate column tells you roughly what fraction of reference words were aligned, but for word-recognition quality you'd use a WER harness.</li>
+</ul>
+
+<h2>Glossary</h2>
+
+<dl class="glossary">
+  <dt>Forced alignment</dt>
+  <dd>Given audio and a known transcript, computing exactly when each word/phoneme occurs in the audio. "Cheats" in the sense that it has the right transcript to start with — that's why MFA's output is a stronger reference than a recogniser's output.</dd>
+
+  <dt>MFA (Montreal Forced Aligner)</dt>
+  <dd>The open-source, widely-used forced aligner this harness uses for reference timestamps. <a href="https://montreal-forced-aligner.readthedocs.io">docs</a></dd>
+
+  <dt>TextGrid</dt>
+  <dd>The file format MFA outputs — one file per audio clip, listing each word with its start and end times.</dd>
+
+  <dt>Word-level timestamps</dt>
+  <dd>For each word the STT model emitted, the start and end time in the audio. Some providers produce them natively from the recognition model; others run a separate alignment pass on the recognised text. Quality varies; that's what we're measuring.</dd>
+
+  <dt>Inverse text normalization (ITN)</dt>
+  <dd>The post-processing step that turns spoken numbers / dates / addresses into their written form: <code>"twenty twenty six"</code> → <code>"2026"</code>, <code>"five dollars"</code> → <code>"$5"</code>. It's what makes transcripts look professional and also what creates N-to-M alignment mismatches in this eval.</dd>
+
+  <dt>Edit distance / minimum-edit-distance alignment</dt>
+  <dd>The same algorithm WER uses: find the cheapest sequence of inserts, deletes, and substitutions that turns one word list into the other. The resulting alignment tells us which hypothesis word corresponds to which reference word.</dd>
+
+  <dt>Substitution merging</dt>
+  <dd>This harness's fix for N-to-M alignment chunks. When a reference word maps to several hypothesis words (or vice versa), merge the longer side into one virtual word spanning from the first sub-word's start to the last sub-word's end, then compare timestamps as a 1:1 pair.</dd>
+
+  <dt>MAE / median / p90</dt>
+  <dd>Three different ways to summarise a distribution of errors: the average, the typical, and the worst-realistic. We report all three because they tell different stories.</dd>
+
+  <dt>Tolerance bucket</dt>
+  <dd>"% of word boundaries that landed within X milliseconds of the reference." More directly useful for product decisions than averages.</dd>
+
+  <dt>Pooled aggregation</dt>
+  <dd>Computing the corpus-level metric by pooling every word-pair offset across every utterance into one big set, then computing once. This is the correct way to compute corpus-level percentiles — a weighted mean of per-file medians is not the same as the median of the pool.</dd>
+
+  <dt>p90 tail</dt>
+  <dd>The shape of the distribution past the 90th percentile. A long p90 tail means "the bad cases are very bad," which is often more annoying to users than "everything is consistently OK."</dd>
+</dl>
+
+</main>
+</body>
+</html>

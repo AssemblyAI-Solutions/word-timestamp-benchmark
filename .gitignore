@@ -1,0 +1,25 @@
+# Secrets
+.env
+.env.local
+
+# Eval artifacts
+corpus*/
+mfa_out*/
+results-*.json
+results-*.html
+latest.json
+latest.html
+# legacy (pre-timestamp naming)
+results.json
+results.html
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+.pytest_cache/
+
+# OS
+.DS_Store
